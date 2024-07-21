@@ -159,7 +159,7 @@ if __name__ == "__main__":
         else:
             arguments.client = arguments.client.split(',')
         if not arguments.channel:
-            Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet}, daemon=True).start()
+            Thread(target=sniff, kwargs={"iface": arguments.interface, "prn": process_packet, "store": False}, daemon=True).start()
             started_sniffing = True
             display('*', "Channel not Provided!")
             display(':', f"Waiting for Beacon Frame for SSID => {Back.MAGENTA}{arguments.ssid}{Back.RESET}")
