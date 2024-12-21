@@ -105,7 +105,7 @@ if __name__ == "__main__":
                               ('-L', "--load", "load", "Load SSIDs for Access Points and their Clients from File (AP SSID,Client SSID,Channel)"),
                               ('-C', "--channel", "channel", "Channel to send Deauthentication Frames to (Would help if TBTT (Target Beacon Transmit Time) is large)"),
                               ('-f', "--count", "count", f"Count of Deauthentication frames to send in each set (Default={deauth_frame_set_count})"),
-                              ('-d', "--delay", "delay", f"Delay Between Channel Hopping (Default={send_interval_delay} seconds)"),
+                              ('-d', "--delay", "delay", f"Interval for sending Deauthentication Frames (Default={send_interval_delay} seconds)"),
                               ('-D', "--hopping-delay", "hopping_delay", f"Channel Hopping Delay (Default={channel_hopping_delay} seconds)"),
                               ('-l', "--loop", "loop", f"Number of Times to Loop the sending of Deauthentication Frames (0 if Indefinitely, Default={packet_sent_loops})"))
     if not check_root():
