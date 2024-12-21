@@ -16,3 +16,5 @@ Install the dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+## Note
+This Deauthentication Attack won't work on WPA3 WiFi Networks because of Protected Management Frames (PMF)
